@@ -75,10 +75,27 @@ def create_refresh_token(user_id: str) -> str:
 
 
 def set_auth_cookies(response: Response, access: str, refresh: str):
-    response.set_cookie("access_token", access, httponly=True, secure=False,
-                        samesite="lax", max_age=ACCESS_TOKEN_EXP_MIN * 60, path="/")
-    response.set_cookie("refresh_token", refresh, httponly=True, secure=False,
-                        samesite="lax", max_age=REFRESH_TOKEN_EXP_DAYS * 86400, path="/")
+    # Use secure cookies in production (HTTPS)
+    is_production = os.environ.get("VERCEL_ENV") == "production" or os.environ.get("ENVIRONMENT") == "production"
+    
+    response.set_cookie(
+        "access_token", 
+        access, 
+        httponly=True, 
+        secure=is_production,
+        samesite="none" if is_production else "lax", 
+        max_age=ACCESS_TOKEN_EXP_MIN * 60, 
+        path="/"
+    )
+    response.set_cookie(
+        "refresh_token", 
+        refresh, 
+        httponly=True, 
+        secure=is_production,
+        samesite="none" if is_production else "lax", 
+        max_age=REFRESH_TOKEN_EXP_DAYS * 86400, 
+        path="/"
+    )
 
 
 def _serialize_user(u: dict) -> dict:
@@ -208,8 +225,16 @@ async def refresh_token(request: Request, response: Response):
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         access = create_access_token(uid, user["email"])
-        response.set_cookie("access_token", access, httponly=True, secure=False,
-                            samesite="lax", max_age=ACCESS_TOKEN_EXP_MIN * 60, path="/")
+        is_production = os.environ.get("VERCEL_ENV") == "production" or os.environ.get("ENVIRONMENT") == "production"
+        response.set_cookie(
+            "access_token", 
+            access, 
+            httponly=True, 
+            secure=is_production,
+            samesite="none" if is_production else "lax", 
+            max_age=ACCESS_TOKEN_EXP_MIN * 60, 
+            path="/"
+        )
         return {"ok": True}
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -484,15 +509,25 @@ async def root():
 # ---------------------------------------------------------------------------
 # Mount + CORS + startup
 # ---------------------------------------------------------------------------
-app.include_router(api)
 
+# Get CORS origins from environment
+cors_origins = os.environ.get("CORS_ORIGINS", "*")
+if cors_origins == "*":
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [origin.strip() for origin in cors_origins.split(",")]
+
+# Add CORS middleware BEFORE including router
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if os.environ.get("CORS_ORIGINS", "*") == "*" else os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+app.include_router(api)
 
 
 async def seed():
